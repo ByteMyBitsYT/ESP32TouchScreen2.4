@@ -1,0 +1,645 @@
+esphome:
+  name: screen24
+  friendly_name: screen24
+
+esp32:
+  board: denky32
+  framework:
+    type: arduino
+
+globals:
+  - id: last_random_number
+    type: float
+    initial_value: '0.0'
+  - id: last_update
+    type: unsigned long
+    initial_value: '0'
+  - id: last_mode
+    type: std::string
+    restore_value: no
+    initial_value: '"UNKNOWN"'
+  - id: last_temp
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: ha_online
+    type: std::string
+    initial_value: '"OFFLINE"'
+
+  - id: temp_wanted_global
+    type: int
+    initial_value: '45'
+
+  - id: mode_global
+    type: std::string
+    initial_value: '"AUTO"'
+
+  - id: touch_delay
+    type: int
+    restore_value: no
+    initial_value: '200'
+
+  - id: fallback_temperature
+    type: int
+    initial_value: '45'
+  - id: fallback_mode
+    type: std::string
+    initial_value: '"AUTO"'
+
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: ""
+  id: my_homeassistant
+
+ota:
+  password: ""
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Screen24 Fallback Hotspot"
+    password: ""
+    
+captive_portal:
+
+font:
+  - file: 'slkscr.ttf'
+    id: font1
+    size: 17
+
+  - file: 'slkscr.ttf'
+    id: font1small
+    size: 10
+
+  - file: 'BebasNeue-Regular.ttf'
+    id: font2
+    size: 55
+
+  - file: 'arial.ttf'
+    id: font3
+    size: 100
+
+  - file: 'BebasNeue-Regular.ttf'
+    id: font4
+    size: 30
+  - file: 'BebasNeue-Regular.ttf'
+    id: font5
+    size: 23    
+
+switch:
+
+  - platform: gpio
+    name: "Screen Light"
+    id: bck24
+    pin: 27
+    inverted: no
+    restore_mode: ALWAYS_ON
+
+  - platform: gpio
+    pin: GPIO32
+    name: "Heater"
+    id: therm1
+    inverted: no
+    restore_mode: ALWAYS_OFF
+
+
+i2c:
+  - id: "bme280_i2c"
+    sda: 22
+    scl: 21
+    scan: true
+
+
+script:
+  - id: update_homeassistant
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ha_online) == "ONLINE";'
+          then:
+            - homeassistant.service:
+                service: input_number.set_value
+                data_template:
+                  entity_id: input_number.garagetempwanted
+                  value: !lambda 'return id(temp_wanted_global);'
+            - homeassistant.service:
+                service: input_select.select_option
+                data_template:
+                  entity_id: input_select.heat_mode
+                  option: !lambda 'return id(mode_global);'
+          
+       
+
+text_sensor:
+
+  # Send IP Address                                                                                                                                                                                                                      
+  - platform: wifi_info
+    ip_address:
+      name: Screen24 IP Address
+    ssid:
+      name: "Screen24  SSID"
+    bssid:
+      name: "Screen24 Conneted BSSID"
+
+  # Send Uptime in raw seconds                                                                                                                                                                                                           
+  - platform: template
+    name: Screen24 Uptime
+    id: uptime_human
+    icon: mdi:clock-start   
+
+  #set on/off/auto     
+  - platform: homeassistant
+    id: ha_heat_mode
+    entity_id: input_select.heat_mode
+    name: "Heat Mode State"
+    on_value:
+        then:
+          - lambda: |-
+              id(mode_global) = id(ha_heat_mode).state;   
+
+  - platform: template
+    name: "Thermostat Mode"
+    id: "mode_status"
+    lambda: |-
+      if (id(mode_global) == "AUTO") {
+        return {"Auto"};
+      } else if (id(mode_global) == "ON") {
+        return {"On"};
+      } else if (id(mode_global) == "OFF") {
+        return {"Off"};
+      } else {
+        return {"Unknown"};
+      }
+
+sensor:
+  - platform: bme280
+    i2c_id: bme280_i2c
+    temperature:
+      name: "BME280 Temperature"
+      oversampling: 16x
+      id: temperature24
+    pressure:
+      name: "BME280 Pressure"
+      id: pressure24
+    humidity:
+      name: "BME280 Humidity"
+      id: humidity24
+    address: 0x76
+    update_interval: 10s
+
+
+  - platform: wifi_signal
+    name: Screen24 WiFi Strength
+    update_interval: 30s
+
+  - platform: uptime
+    name: Screen24 Uptime
+    id: uptime_sensor
+    update_interval: 10s
+    on_raw_value:
+      then:
+        - text_sensor.template.publish:
+            id: uptime_human
+            # Custom C++ code to generate the result                                                                                                                                                                                     
+            state: !lambda |-
+              int seconds = round(id(uptime_sensor).raw_state);
+              int days = seconds / (24 * 3600);                                                                                                                                                                                          
+              seconds = seconds % (24 * 3600);                                                                                                                                                                                           
+              int hours = seconds / 3600;                                                                                                                                                                                                
+              seconds = seconds % 3600;                                                                                                                                                                                                  
+              int minutes = seconds /  60;                                                                                                                                                                                               
+              seconds = seconds % 60;                                                                                                                                                                                                    
+              return (                                                                                                                                                                                                                   
+                (days ? to_string(days) + "d " : "") +
+                (hours ? to_string(hours) + "h " : "") +
+                (minutes ? to_string(minutes) + "m " : "") +
+                (to_string(seconds) + "s")
+              ).c_str();    
+
+  # Helper Value from Home Assistant
+  - platform: homeassistant
+    id: grv_wnt
+    entity_id: input_number.garagetempwanted
+    name: "Garage Desired Temperature"
+    on_value:
+      then:
+        - lambda: |-
+            id(temp_wanted_global) = static_cast<int>(id(grv_wnt).state);
+
+# An entity from home assistant that creates a new random number every 30 seconds 
+  - platform: homeassistant
+    id: randomnumber
+    entity_id: sensor.stillalivetick
+    name: "Still Alive"
+    on_value:
+      - lambda: |-
+          id(last_random_number) = id(randomnumber).state;
+          id(last_update) = millis();
+        
+
+  - platform: template
+    name: "Desired Temperature"
+    id: desired_temperature
+    unit_of_measurement: "°F"
+    icon: "mdi:thermometer"
+    update_interval: 5s  # Set an appropriate update interval
+    lambda: |-
+      return static_cast<float>(id(temp_wanted_global));
+
+
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          std::string current_mode;
+          int current_temperature_setpoint = id(temp_wanted_global);
+          current_mode = id(mode_global);
+          current_temperature_setpoint = id(temp_wanted_global);
+          // Convert the BME280 temperature reading to Fahrenheit
+          float fahrenheitTemp = (id(temperature24).state * 9.0 / 5.0) + 32.0;
+
+          // Apply logic based on current mode
+          if (current_mode == "OFF") {
+            if (id(therm1).state) {
+              id(therm1).turn_off();
+            }
+          } else if (current_mode == "ON") {
+            if (!id(therm1).state) {
+              id(therm1).turn_on();
+            }
+          } else if (current_mode == "AUTO") {
+            if (fahrenheitTemp < current_temperature_setpoint) {
+              if (!id(therm1).state) {
+                id(therm1).turn_on();
+              }
+            } else {
+              if (id(therm1).state) {
+                id(therm1).turn_off();
+              }
+            }
+          }
+          // Execute update script only if the mode or temperature has changed and HA is online
+          if ((id(ha_online) == "ONLINE") && ((current_mode != id(last_mode)) || (current_temperature_setpoint != id(last_temp)))) {
+            id(update_homeassistant).execute();
+            id(last_mode) = current_mode;
+            id(last_temp) = current_temperature_setpoint;
+          }
+
+  
+  - interval: 5s
+    then:
+      - lambda: |-
+          // Trigger update
+          id(mode_status).update();
+
+
+  - interval: 10s
+    then:
+      - lambda: |-
+          if (millis() - id(last_update) < 60000) {  // 60 seconds
+            id(ha_online) = "ONLINE";
+          } else {
+            id(ha_online) = "OFFLINE";
+          }
+
+#          id(my_display).update();  
+
+
+spi:
+  clk_pin: 14
+  mosi_pin: 13
+  miso_pin: 12
+
+
+color:
+  - id: my_red
+    red: 100%
+    green: 0%
+    blue: 0%
+  - id: my_color
+    red: 100%
+    green: 100%
+    blue: 0%
+  - id: my_green
+    red: 0%
+    green: 100%
+    blue: 0%
+  - id: my_blue
+    red: 0%
+    green: 0%
+    blue: 100%
+  - id: my_black
+    red: 0%
+    green: 0%
+    blue: 0%    
+  - id: my_white
+    red: 100%
+    green: 100%
+    blue: 100%
+  - id: my_heating
+    red: 50%
+    green: 0%
+    blue: 0%
+  - id: my_gray
+    red: 65%
+    green: 65%
+    blue: 65%
+  - id: ha_blue
+    red: 31%
+    green: 75%
+    blue: 95%
+  - id: ha_dark
+    red: 3%
+    green: 30%
+    blue: 42%      
+
+
+touchscreen:
+  platform: xpt2046
+  id: my_touchscreen
+  cs_pin: 33
+  update_interval: 20ms
+  report_interval: 20ms
+  threshold: 300
+  calibration_x_min: 3848
+  calibration_x_max: 320
+  calibration_y_min: 3848
+  calibration_y_max: 240
+  swap_x_y: false
+  on_touch:
+    - lambda: |-
+        // Define touch coordinates for buttons
+        int left_button_top_x = 0;
+        int left_button_bottom_x = 71;
+        int left_button_top_y = 67;
+        int left_button_bottom_y = 170;
+
+        int right_button_top_x = 230;
+        int right_button_bottom_x = 320;
+        int right_button_top_y = 67;
+        int right_button_bottom_y = 170;
+
+        int mode_button_top_x = 0;       
+        int mode_button_bottom_x = 70;   
+        int mode_button_top_y = 0;       
+        int mode_button_bottom_y = 60;
+
+        // Mode button logic
+        if (id(my_touchscreen).x >= mode_button_top_x && id(my_touchscreen).x <= mode_button_bottom_x &&
+            id(my_touchscreen).y >= mode_button_top_y && id(my_touchscreen).y <= mode_button_bottom_y) {
+            delay(id(touch_delay));
+            delay(id(touch_delay));
+            // Update HA mode
+            if (id(mode_global) == "AUTO") {
+              id(mode_global) = "ON";
+            } else if (id(mode_global) == "ON") {
+              id(mode_global) = "OFF";
+            } else {
+              id(mode_global) = "AUTO";
+            }
+        }
+
+        // Temperature adjustment logic
+        if (id(my_touchscreen).x > left_button_top_x && id(my_touchscreen).x < left_button_bottom_x &&
+            id(my_touchscreen).y > left_button_top_y && id(my_touchscreen).y < left_button_bottom_y) {
+            delay(id(touch_delay));
+            id(temp_wanted_global) = max(0, id(temp_wanted_global) - 1);
+        } else if (id(my_touchscreen).x > right_button_top_x && id(my_touchscreen).x < right_button_bottom_x &&
+                    id(my_touchscreen).y > right_button_top_y && id(my_touchscreen).y < right_button_bottom_y) {
+            delay(id(touch_delay));
+            id(temp_wanted_global) = min(150, id(temp_wanted_global) + 1);
+        }
+
+
+        if (id(ha_online) == "ONLINE") {
+          id(update_homeassistant).execute();
+        } else {
+        }
+
+
+
+
+display:
+  - platform: ili9xxx
+    model: ili9341
+    cs_pin: 15
+    dc_pin: 2
+    id: my_display
+    rotation: 90
+    lambda: |-
+      // Variables for display
+      esphome::Color text_color;
+      esphome::Color text_color2;      
+      char status_text[10];
+      esphome::Color status_text_color;
+      esphome::Color middle_box_color;
+      float display_temperature = static_cast<float>(id(temp_wanted_global));
+      // Convert Celsius to Fahrenheit directly here
+      float fahrenheitTemp = (id(temperature24).state * 9.0 / 5.0) + 32.0;
+
+      // Determine colors and texts based on mode_global
+      if (id(mode_global) == "ON") {
+        text_color = id(my_red);
+        text_color2 = id(my_white);        
+        strcpy(status_text, "HEATING");
+        status_text_color = id(my_red);
+        middle_box_color = id(my_red);
+      } else if (id(mode_global) == "OFF") {
+        text_color = id(my_gray);
+        text_color2 = id(my_gray);        
+        strcpy(status_text, "IDLE");
+        status_text_color = id(my_gray);
+        middle_box_color = id(my_gray);
+      } else {  // AUTO or other states
+        text_color = id(my_white);
+        text_color2 = id(my_white);        
+        strcpy(status_text, id(therm1).state ? "HEATING" : "IDLE");
+        status_text_color = id(therm1).state ? id(my_red) : id(my_white);
+        middle_box_color = id(therm1).state ? id(my_red) : id(my_green);
+      }
+
+      // Set the background color based on the heater status
+      it.fill(id(therm1).state ? id(my_heating) : id(my_black));
+
+      // Display the mode text at the top left
+      it.print(37, 30, id(font4), text_color, TextAlign::CENTER, id(mode_global).c_str());
+
+      // Define x-coordinate for text based on the current status
+      int text_x_coord;
+      text_x_coord = it.get_width() - 39;
+
+      // Display the heating status text
+      it.print(text_x_coord, 30, id(font4), status_text_color, TextAlign::CENTER, status_text);
+
+      // Calculate dimensions and positions for the temperature boxes
+      int box_size = 100;
+      int spacing = 10;
+      float box_width_ratio = 0.8;
+      int left_box_width = box_size * box_width_ratio;
+      int center_box_width = 140;
+      int right_box_width = box_size * box_width_ratio;
+      int start_x = (it.get_width() - ((box_size * 3) + (spacing * 2))) / 2;
+      int start_y = (it.get_height() - box_size) / 2;
+
+      // Display the desired temperature directly below mode
+      it.printf(38, 55, id(font5), text_color2, TextAlign::CENTER, "%d°", id(temp_wanted_global));
+
+      // Drawing the existing boxes
+      it.rectangle(start_x, start_y + 10, left_box_width, 80, id(my_blue));
+      it.rectangle(start_x + left_box_width + spacing, start_y + 10, center_box_width, 80, middle_box_color);
+      it.rectangle(start_x + left_box_width + center_box_width + spacing * 2, start_y + 10, right_box_width, 80, id(my_red));
+
+      // Draw "+" and "-" inside the right and left boxes
+      it.print(start_x + left_box_width + center_box_width + spacing * 2 + (right_box_width / 2), start_y + (box_size / 2), id(font3), text_color2, TextAlign::CENTER, "+");
+      it.print(start_x + (left_box_width / 2), start_y + (box_size / 2.5), id(font3), text_color2, TextAlign::CENTER, "-");
+
+      // Display the current temperature inside the middle box
+      it.printf(start_x + left_box_width + spacing + (center_box_width / 2), start_y + (box_size / 1.8), id(font2), id(my_white), TextAlign::CENTER, "%.1f°F", fahrenheitTemp);
+
+      // Sensor readouts below the boxes
+      int sensor_readout_y = start_y + box_size + 10;
+      it.printf(start_x, sensor_readout_y, id(font4), id(my_white), TextAlign::LEFT, "Humidity: %.1f%%", id(humidity24).state);
+      sensor_readout_y += 30;
+      float pressure_psi = (id(pressure24).state * 0.0145038);
+      it.printf(start_x, sensor_readout_y, id(font4), id(my_white), TextAlign::LEFT, "Pressure: %.2f PSI", pressure_psi);
+
+      // Home Assistant connection status
+      it.printf(160, 52, id(font1small), id(my_white), TextAlign::CENTER, "Home Assistant", id(ha_online).c_str());
+
+      // Conditional display based on the value of ha_online
+      if (id(ha_online) == "ONLINE") {
+        it.printf(160, 63, id(font1), id(my_green), TextAlign::CENTER, "%s");
+      } else {
+        it.printf(160, 63, id(font1), id(my_red), TextAlign::CENTER, "%s");
+      }
+
+      
+      // Conditional set house colors
+      esphome::Color house_color;
+      esphome::Color house_color2;
+      if (id(ha_online) == "ONLINE") {
+        house_color = id(ha_blue);
+        house_color2 = id(my_white);
+      } else {
+        house_color = id(ha_dark);
+        house_color2 = id(my_black);
+      }
+
+      // Assume these are the dimensions and position for the house outline
+      int house_width = 40; // width of the house
+      int house_height = 17; // height of the house
+      int roof_height = 23; // height of the roof triangle
+      int start_xx = 140; // centered on the screen
+      int start_yy = 4; // centered on the screen
+
+      // Draw the main rectangle of the house
+      it.filled_rectangle(start_xx, start_yy + roof_height, house_width, house_height, house_color);
+      int roof_peak_x = start_xx + house_width / 2;
+      int roof_base_y = start_yy + roof_height;
+
+      // Draw the chimney
+      int chimney_width = 5; // width of the chimney
+      int chimney_height = 10; // height of the chimney
+      int chimney_base_x = start_xx + (house_width / 2) + 15; // chimney position on the roof
+      int chimney_base_y = start_yy + (roof_height / 1.2); // chimney base aligned with the roof
+
+      esphome::Color chimney_color = id(therm1).state ? id(my_red) : house_color;
+
+      // Draw the chimney as a filled rectangle
+      it.filled_rectangle(chimney_base_x, chimney_base_y - chimney_height, chimney_width, chimney_height, chimney_color);
+
+
+      // Draw the roof triangle by drawing horizontal lines from left to right
+      for (int y = 0; y < roof_height; y++) {
+          // Calculate the start and end x coordinates for the current y coordinate
+          int line_start_x = roof_peak_x - (house_width / 1.5) * y / roof_height;
+          int line_end_x = roof_peak_x + (house_width / 1.5) * y / roof_height;
+          
+          // Draw a horizontal line for the current level of the roof
+          it.line(line_start_x, start_yy + y, line_end_x, start_yy + y, house_color);
+      }
+
+      // Circle properties
+      int circle_diameter = 9; // diameter of the circles
+      int num_circles = 3; // total number of circles to draw
+      int circle_radius = circle_diameter / 2;
+
+      // Coordinates for circles relative to house position
+      int circles_coordinates[num_circles][2] = {
+          // The coordinates are made up for illustration, you will need to adjust these based on the logo's exact look
+          {start_xx + 10, start_yy + house_height + 7},  // left
+          {start_xx + 20, start_yy + house_height - 4}, //mid
+          {start_xx + 30, start_yy + house_height + 7},  // right
+
+      };
+
+      // Draw the circles
+      for (int i = 0; i < num_circles; i++) {
+          it.filled_circle(circles_coordinates[i][0], circles_coordinates[i][1], circle_radius, house_color2);
+      }
+      // Coordinates for the bottom middle of the house (where the line should start)
+      int bottom_mid_x = start_xx + house_width / 2;
+      int bottom_mid_y = start_yy + roof_height + house_height -1;
+
+      // Coordinates for the middle circle (where the line should end)
+      int mid_circle_x = circles_coordinates[1][0]; // Assuming the middle circle is the second one in your array
+      int mid_circle_y = circles_coordinates[1][1];
+
+      // Draw a thick line by drawing multiple parallel lines
+      int line_thickness = 2; // Set the thickness of the line
+      for (int i = -line_thickness / 2; i <= line_thickness / 2; i++) {
+        it.line(bottom_mid_x + i, bottom_mid_y, mid_circle_x + i, mid_circle_y, house_color2);
+      }      
+      // Starting coordinates for the diagonal lines (bottom middle of the house)
+      int diag_line_start_x = start_xx + house_width / 2;
+      int diag_line_start_y = start_yy + roof_height + house_height - 6;
+
+      // Ending coordinates for the left circle
+      int diag_left_circle_x = circles_coordinates[0][0] - 2;
+      int diag_left_circle_y = circles_coordinates[0][1] - circle_radius + 2.5; // Adjust for the center of the circle
+
+      // Ending coordinates for the right circle (assuming it's the third one in your array)
+      int diag_right_circle_x = circles_coordinates[2][0] + 2;
+      int diag_right_circle_y = circles_coordinates[2][1] - circle_radius + 2.5; // Adjust for the center of the circle
+
+      // Define the thickness of the lines
+      int diag_line_thickness = 3; // This will result in a 3-pixel thick line
+
+      // Draw multiple lines for the left and right diagonal lines to create thickness
+      for (int offset = 0; offset < diag_line_thickness; offset++) {
+        // Left diagonal line
+        it.line(diag_line_start_x - offset, diag_line_start_y, diag_left_circle_x - offset, diag_left_circle_y, house_color2);
+        it.line(diag_line_start_x + offset, diag_line_start_y, diag_left_circle_x + offset, diag_left_circle_y, house_color2);
+
+        // Right diagonal line
+        it.line(diag_line_start_x - offset, diag_line_start_y, diag_right_circle_x - offset, diag_right_circle_y, house_color2);
+        it.line(diag_line_start_x + offset, diag_line_start_y, diag_right_circle_x + offset, diag_right_circle_y, house_color2);
+      }  
+
+      // Circle properties
+      int circle_diameter2 = 5; // diameter of the circles
+      int num_circles2 = 3; // total number of circles to draw
+      int circle_radius2 = circle_diameter2 / 2;
+
+      // Coordinates for circles relative to house position
+      int circles_coordinates2[num_circles][2] = {
+          // The coordinates are made up for illustration, you will need to adjust these based on the logo's exact look
+          {start_xx + 10, start_yy + house_height + 7},  // left
+          {start_xx + 20, start_yy + house_height - 4}, //mid
+          {start_xx + 30, start_yy + house_height + 7},  // right
+
+      };
+
+      // Draw the circles
+      for (int i = 0; i < num_circles2; i++) {
+          it.filled_circle(circles_coordinates2[i][0], circles_coordinates2[i][1], circle_radius2, house_color);
+      }      
